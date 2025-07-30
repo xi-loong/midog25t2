@@ -92,7 +92,7 @@ It is required to modify this example to your needs and insert your mitosis clas
 If you need a different base image to build your container (e.g., Tensorflow instead of Pytorch, or a different version), if you need additional libraries and to make sure that all source files (and weights) are copied to the docker container, you will have to adapt the [Dockerfile](Dockerfile) and the [requirements.txt](requirements.txt) file accordingly.
 
 Kindly refer to the image below to identify the relevant points:
-<img width="1299" alt="image" src="docs/dockerfile.png">
+<img width="1299" alt="dockerfile" src="https://github.com/user-attachments/assets/1b500eda-4f81-43ce-ae2a-6bf8f698f90d" />
 
 
 ## 4. Testing your container <a name="test"></a>
@@ -111,21 +111,22 @@ When your test run finishes successfully you can run the `do_save.sh` script to 
 Please be reminded that only **verified users** will be able to submit to the challenge (as written [here](https://grand-challenge.org/documentation/making-a-challenge-submission/#submission-tips)). If you used an educational email address in the sign up process, this will be much quicker. You can find all information about the account verification [at this link](https://grand-challenge.org/documentation/verification/).
 
 
-In order to submit your docker container, you first have to add an **Algorithm** entry for your docker container [here] https://midog2025.grand-challenge.org/evaluation/track-1-object-detection-preliminary-evaluation-phase/algorithms/create/.
+In order to submit your docker container, you first have to add an **Algorithm** entry for your docker container [here](https://midog2025.grand-challenge.org/evaluation/track-2-atypical-mitosis-classification-preliminary-eval-phase/algorithms/create/).
 
 Please enter a name for the algorithm:
 
-<img width="1299" alt="create_algorithm" src="docs/create_algo.png">
+<img width="1299" alt="image" src="https://github.com/user-attachments/assets/aefe209c-bf2e-4816-89e7-1aca2d5cb565" />
+
 
 After saving, you can add your docker container (you can also overwrite your container here):
 
-<img width="1299" alt="create_algorithm" src="docs/container_images.png">
+<img width="1299" alt="image" src="https://github.com/user-attachments/assets/d58e22c1-a452-4a45-b593-4416f8611e80" />
 
 Please note that it can take a while (several minutes) until the container becomes active. You can determine which one is active in the same dialog. 
 
 You can also try out your algorithm. Please note that you will require an image that has the DPI property set in order to use this function. You can use the image test/input/stack_5.tiff provided as part of this container as test image.
 
-<img width="1299" alt="try_out_algorithm" src="docs/try_out_algo.png">
+<img width="1299" alt="image" src="https://github.com/user-attachments/assets/fe24702e-a6ee-4e0b-8efb-49726dd3c3a6" />
 
 
 Final submission to a phase will be updated soon!!!
