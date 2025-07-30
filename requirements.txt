@@ -1,0 +1,7 @@
+SimpleITK
+numpy
+torch>=2.0.0
+torchvision
+timm
+Pillow
+numpy
