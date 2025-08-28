@@ -31,7 +31,7 @@ import uni2 as net
 
 INPUT_PATH = Path("/input") if os.path.exists("/input") else Path("./input")
 OUTPUT_PATH = Path("/output") if os.path.exists("/output") else Path("./output")
-MODEL_WEIGHTS = Path("/opt/app/model") if os.path.exists("/opt/app/model") else Path("./opt/app/model")
+MODEL_WEIGHTS = Path("/opt/ml/model") if os.path.exists("/opt/ml/model") else Path("./opt/ml/model")
 
 CLASS_NAMES = {1: "atypical", 0: "normal"}
 THRESHOLD = 0.5  # probability threshold for classifying *normal*
