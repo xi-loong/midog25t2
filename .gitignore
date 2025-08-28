@@ -1,0 +1,6 @@
+﻿__pycache__
+input/*
+*.pth
+.idea
+opt
+output

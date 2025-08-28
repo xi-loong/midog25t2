@@ -5,3 +5,6 @@ torchvision
 timm
 Pillow
 numpy
+albumentations
+peft
+safetensors

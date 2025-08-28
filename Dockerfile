@@ -22,5 +22,6 @@ RUN python -m pip install \
     --requirement /opt/app/requirements.txt
 
 COPY --chown=user:user inference.py /opt/app/
+COPY --chown=user:user uni2.py /opt/app/
 
 ENTRYPOINT ["python", "inference.py"]
