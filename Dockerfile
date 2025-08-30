@@ -23,5 +23,6 @@ RUN python -m pip install \
 
 COPY --chown=user:user inference.py /opt/app/
 COPY --chown=user:user uni2.py /opt/app/
+COPY --chown=user:user stain.py /opt/app/
 
 ENTRYPOINT ["python", "inference.py"]

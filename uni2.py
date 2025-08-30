@@ -46,7 +46,126 @@ class ViTClassifier(torch.nn.Module):
         return {'loss': loss, 'logits': logits}
 
 
-def build(num_classes=2, lora_cfg=dict(alpha=16, rank=32)):
+class VPTViT(nn.Module):
+    """
+    Wrap a timm VisionTransformer with Visual Prompt Tuning (VPT).
+    - Supports shallow (only before block 0) and deep (before every block).
+    - Freeze the backbone; train only prompts (+ optional head).
+    """
+
+    def __init__(
+            self,
+            vit,
+            num_classes=None,
+            prompt_len: int = 8,
+            deep: bool = True,
+            prompt_dropout: float = 0.0,
+            train_head: bool = True,
+    ):
+        super().__init__()
+        assert isinstance(vit, timm.models.VisionTransformer)
+        self.vit = vit
+        self.embed_dim = vit.embed_dim
+        self.prompt_len = prompt_len
+        self.deep = deep
+        self.prompt_dropout = nn.Dropout(prompt_dropout) if prompt_dropout > 0 else nn.Identity()
+
+        # 可选：重置分类头类别数
+        if num_classes is not None and num_classes != vit.num_classes:
+            vit.reset_classifier(num_classes=num_classes)
+
+        # === 构造提示参数 ===
+        if deep:
+            # 每一层一个独立的 prompt 参数
+            self.deep_prompts = nn.ParameterList([
+                nn.Parameter(torch.zeros(1, prompt_len, self.embed_dim))
+                for _ in range(len(vit.blocks))
+            ])
+            nn.init.trunc_normal_(self.deep_prompts[0], std=0.02)
+            for p in self.deep_prompts[1:]:
+                nn.init.trunc_normal_(p, std=0.02)
+        else:
+            # 只在第0层前插一次
+            self.shallow_prompt = nn.Parameter(torch.zeros(1, prompt_len, self.embed_dim))
+            nn.init.trunc_normal_(self.shallow_prompt, std=0.02)
+
+        # === 冻结骨干参数，仅训练 prompt（和可选 head）===
+        for n, p in self.vit.named_parameters():
+            p.requires_grad = False
+        if train_head:
+            # 允许 head 更新（更稳）
+            for n, p in self.vit.get_classifier().named_parameters():
+                p.requires_grad = True
+
+    @torch.no_grad()
+    def _freeze_backbone_buffers(self):
+        # 运行时不更新 pos_embed/cls/reg 等缓冲
+        self.vit.eval()
+
+    def _prep_inputs(self, x: torch.Tensor):
+        """
+        复制自 vit.forward_features 的前半段：得到加入 pos_embed 的序列 tokens。
+        """
+        x = self.vit.patch_embed(x)  # [B, N_patches, C] 或 NHWC -> NLC
+        x = self.vit._pos_embed(x)  # 加上 pos_embed 并拼接 cls/reg
+        x = self.vit.patch_drop(x)
+        x = self.vit.norm_pre(x)
+        return x
+
+    def _insert_prompts(self, x: torch.Tensor, prompt: torch.Tensor) -> torch.Tensor:
+        """
+        在 prefix tokens（cls+reg）之后插入 prompt，再接原 patch tokens。
+        x: [B, N_prefix + N_patch, C]
+        prompt: [1, P, C]
+        """
+        B = x.size(0)
+        P = prompt.size(1)
+        num_prefix = self.vit.num_prefix_tokens  # cls + reg (可能为1或>1)
+        prefix = x[:, :num_prefix, :]
+        patches = x[:, num_prefix:, :]
+        prompt_b = prompt.expand(B, P, -1)
+        x = torch.cat([prefix, self.prompt_dropout(prompt_b), patches], dim=1)
+        return x
+
+    def _remove_prompts(self, x: torch.Tensor, P: int) -> torch.Tensor:
+        """
+        从序列中移除刚才插入的 P 个 prompt。
+        """
+        num_prefix = self.vit.num_prefix_tokens
+        prefix = x[:, :num_prefix, :]
+        # 移除 [num_prefix : num_prefix+P)
+        patches = x[:, num_prefix + P:, :]
+        return torch.cat([prefix, patches], dim=1)
+
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        复现 vit.forward_features，但在每一层前插入/移除 prompt（VPT）。
+        """
+        x = self._prep_inputs(x)
+
+        if self.deep:
+            # 层前插入 -> 过 block -> 移除
+            for i, blk in enumerate(self.vit.blocks):
+                x = self._insert_prompts(x, self.deep_prompts[i])
+                x = blk(x)  # 注意：若你使用 attn_mask/grad ckpt，按需改为与原实现一致
+                x = self._remove_prompts(x, self.prompt_len)
+        else:
+            # 只在第0层前插入一次
+            x = self._insert_prompts(x, self.shallow_prompt)
+            for i, blk in enumerate(self.vit.blocks):
+                x = blk(x)
+            x = self._remove_prompts(x, self.prompt_len)
+
+        x = self.vit.norm(x)
+        return x
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.forward_features(x)
+        x = self.vit.forward_head(x)  # 池化+fc_norm+dropout+head
+        return x
+
+
+def build(num_classes=2, fine_tuning=dict(type='lora',alpha=16, rank=32)):
     backbone = VisionTransformer(
         img_size=224,
         patch_size=14,
@@ -62,15 +181,20 @@ def build(num_classes=2, lora_cfg=dict(alpha=16, rank=32)):
         reg_tokens=8,
         dynamic_img_size=True,
     )
-    if lora_cfg:
-        peft_config = LoraConfig(
-            r=lora_cfg['rank'],
-            lora_alpha=lora_cfg['alpha'],
-            lora_dropout=0.1,
-            target_modules=["qkv", "proj", "mlp.fc1", "mlp.fc2"],
-            modules_to_save=[]
-        )
-        backbone = get_peft_model(backbone, peft_config)
+
+    if fine_tuning:
+        type = fine_tuning.pop('type')
+        if type == 'lora':
+            peft_config = LoraConfig(
+                r=fine_tuning['rank'],
+                lora_alpha=fine_tuning['alpha'],
+                lora_dropout=0.1,
+                target_modules=["qkv", "proj", "mlp.fc1", "mlp.fc2"],
+                modules_to_save=[]
+            )
+            backbone = get_peft_model(backbone, peft_config)
+        elif type == 'vpt':
+            backbone = VPTViT(backbone, **fine_tuning)
         model = ViTClassifier(backbone, 1536, num_classes, frozen=False)
     else:
         model = ViTClassifier(backbone, 1536, num_classes, frozen=True)
@@ -78,9 +202,9 @@ def build(num_classes=2, lora_cfg=dict(alpha=16, rank=32)):
     return model
 
 
-def load(checkpoint_path, num_classes=2, lora_cfg=dict(alpha=16, rank=32), device="cpu"):
+def load(checkpoint_path, num_classes=2, fine_tuning=dict(type='lora', alpha=16, rank=32), device="cpu"):
     # Step 1: 构建模型（本地，不加载预训练）
-    model = build(num_classes=num_classes, lora_cfg=lora_cfg)
+    model = build(num_classes=num_classes, fine_tuning=fine_tuning)
 
     # Step 2: 加载 safetensors 权重
     state_dict = load_file(checkpoint_path, device=device)
@@ -92,8 +216,8 @@ def load(checkpoint_path, num_classes=2, lora_cfg=dict(alpha=16, rank=32), devic
 
 
 pipeline = A.Compose([
+    A.CenterCrop(width=128, height=128, pad_if_needed=True, fill=255),
     A.Resize(width=224, height=224),
-    A.CenterCrop(width=224, height=224),
     A.Normalize(mean=(0.4850, 0.4560, 0.4060), std=(0.2290, 0.2240, 0.2250))
 ])
 
@@ -135,6 +259,14 @@ if __name__ == '__main__':
 
         def __getitem__(self, item):
             cls, path = self.paths[item]
+            if 'midog25' in path:
+                path = path.replace('midog25', 'midog25-stain')
+            elif 'AtypicalMitoses' in path:
+                path = path.replace('AtypicalMitoses', 'AtypicalMitoses-stain')
+            elif 'AmiBr' in path:
+                path = path.replace('AmiBr', 'AmiBr-stain')
+            else:
+                raise NotImplementedError
             image = cv2.imread(path, cv2.IMREAD_COLOR)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             return image, cls
@@ -143,7 +275,10 @@ if __name__ == '__main__':
             return len(self.paths)
 
 
-    model = load(r'E:\work\mitosis\uni2-mitosis-classifier-lora2\checkpoint-2613\model.safetensors')
+    model = load(
+        r'E:\work\mitosis\uni2-mitosis-classifier-vpt-stain-norm0.5-resize0.9_1.1-prompt8\checkpoint-14807\model.safetensors',
+        fine_tuning=dict(type='vpt'),
+    )
     dataset = Dataset('group1.json')
     model = model.cuda()
     labels = []

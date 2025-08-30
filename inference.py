@@ -26,7 +26,7 @@ import os
 from typing import Any, Dict, List
 import logging as log
 import uni2 as net
-
+import stain
 # Paths & constants
 
 INPUT_PATH = Path("/input") if os.path.exists("/input") else Path("./input")
@@ -48,10 +48,11 @@ def get_interface_key() -> tuple[str, ...]:
 
 def load_image_stack(dir_path: Path) -> List[np.ndarray]:
     tiffs = glob(str(dir_path / "*.tif")) + glob(str(dir_path / "*.tiff"))
+    normalizer = stain.HeNormalizer()
     if not tiffs:
         raise FileNotFoundError(f"No TIFF files found in {dir_path}")
     with Image.open(tiffs[0]) as tif:
-        return [np.array(p.convert("RGB")) for p in ImageSequence.Iterator(tif)]
+        return [normalizer(np.array(p.convert("RGB"))) for p in ImageSequence.Iterator(tif)]
 
 
 def write_json(path: Path, obj):
@@ -84,11 +85,10 @@ def interf0_handler() -> int:
     for filename in os.listdir(MODEL_WEIGHTS):
         if filename.endswith(".safetensors"):
             model_paths.append(f'{MODEL_WEIGHTS}/{filename}')
-
     # Run inference
     outputs = []
     for model_path in model_paths:
-        model = net.load(model_path)
+        model = net.load(model_path, fine_tuning=dict(type='vpt'))
         model.eval()
         model.to(device)
         logits = []
